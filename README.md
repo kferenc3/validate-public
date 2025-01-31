@@ -1,11 +1,12 @@
-# validate-new
+# CSV validator
 ## Description
-This project is designed to validate CSV files based on a set of predefined rules. It uses libraries such as polars, pydantic, and psutil to perform validations efficiently.
+This project is designed to validate CSV files based on a set of predefined rules. It uses libraries such as polars and pydantic to perform validations efficiently. This was a work project originally, but in that version pydantic was ditched due to memory issues.
+I thought to make this available as a public repository to showcase some interesting things I learned while working on this. It is nowhere near a finished tool, but it can does what it supposed to do.
 
 ## Installation
 1. **Clone the repository:**
    ```sh
-    git clone https://github.com/kferenc3/in-validate-rework
+    git clone https://github.com/kferenc3/validate-public
     cd validate-new
     ```
 2. **Install dependencies:**
@@ -15,36 +16,21 @@ This project is designed to validate CSV files based on a set of predefined rule
     ```
 ## Usage
 
-### Generating Test Data
-To generate test data, run the [datagen.py](https://github.com/kferenc3/in-validate-rework/blob/main/tests/datagen.py) script:
-    ```sh
-    python tests/datagen.py
-    ```
-This will create a file with an arbitrary name and number of lines of data of test data.
-
-### Changing Date Format
-To change the date format in the generated CSV file, run the [tests/formatchanger.py](https://github.com/kferenc3/in-validate-rework/blob/main/tests/formatchanger.py) script:
-    ```sh
-    python tests/formatchanger.py
-    ```
-The input and output files names should be specified along with the input and output formats. This can come handy if we want to test files with different datetime formats.
-
 ### Validating CSV Files
-To validate the CSV files, you can run the `validate_new/in_validate.py` script. There are a few work in progress functionalities, however plain offline run works now without known issues.
-Currently the input file name/path can be specified on line 379 of the script.
-
+To validate the CSV files, you can run the `csv_validator/validate.py` script. The script requires a config file in json format to run. It is possible to read csv files from S3 as well and results can be written either locally or to a specified S3 location.
 
 ### Example Command
 ```sh
-python validate_new/in_validate.py --mode offline --event <event.json>
+python csv_validator/validate.py --cfg <config.json>
 ```
 #### With Poetry
 ```sh
-poetry run python validate_new/in_validate.py
+poetry run python csv_validator/validate.py --cfg <config.json>
 ```
 
 ## Configuration
-The script has 2 arguments that should be used while using offline:
-`--mode` and `--event`
-`--mode` should be `offline` and `--event` should be a path to a valid event json file. An example can be found in the repository.
-The validation rules and configurations are defined in this example file. You can modify these rules as per your requirements.
+to do
+## Backlog
+- provide example config json
+- rework existing tests and increase coverage
+- improve readme
