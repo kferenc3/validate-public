@@ -9,21 +9,11 @@ import argparse
 
 from typing import Annotated, Literal, List, Union, Tuple, Generator
 from datetime import datetime
-from urllib.parse import urlparse
 
 import pydantic
-import boto3
-import s3fs
 import polars as pl
 
-# ENV VARS
-AWS_REGION = os.getenv("AWS_REGION", "eu-central-1")
-# Constants for process results
-
-PRESIGNED_URL_DURATION = 60 * 60
-
-# S3 Client
-S3_CLIENT = boto3.client("s3")
+from csv_validator.aws_helpers import parse_s3_path, put_results_s3, generate_storage_creds
 
 # Logger configuration
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(lineno)d - %(message)s ")
@@ -37,60 +27,6 @@ class Jobstate:
 
 class ValidationError(ValueError):
     pass
-
-def parse_s3_path(path: str) -> Tuple[str, str]:
-    """
-    S3 path parser
-    :param path: S3 path to parse (s3://bucket/path/to/file.csv)
-    :return: Bucket name, Key
-    """
-    parts = urlparse(path)
-    LOGGER.info("Bucket: %s - Key: %s", parts.netloc, parts.path.lstrip("/"))
-    return parts.netloc, parts.path.lstrip("/")
-
-def put_results_s3(data: pl.DataFrame, task_config: dict) -> bool:
-    """
-    Writes a CSV file to an Amazon S3 bucket
-    :param data: pl.Dataframe
-    :param task_config: dict
-    :return: True if src_data was added to s3_bucket, otherwise False
-    """
-    
-    LOGGER.info("Loading result CSV file to S3...")
-
-    try:
-        execution_starttime = datetime.strptime(
-            task_config['execution_starttime'][:10], '%Y-%m-%d')
-        log_path = (
-            f"ValidationResult")
-        source_file = parse_s3_path(task_config["source"])[1]
-        s3_key_log = (
-            f'{log_path}'
-            f'{execution_starttime.strftime("/%Y/%m/%d/")}'
-            f'{source_file[:source_file.find('.')]}_result.csv'
-        )
-        s3_bucket_log = parse_s3_path(task_config["log_bucket_name"])[0]
-        LOGGER.debug("Results to be stored in: s3://{}/{}".format(s3_bucket_log, s3_key_log))
-        
-        # sts_client = boto3.client('sts')
-        # response = sts_client.assume_role(
-        #     RoleArn='arn:aws:iam::891377129971:role/A3AllowRole',
-        #     RoleSessionName='TestSession'
-        # )
-        # credentials = response['Credentials']
-        # access_key = credentials['AccessKeyId']
-        # secret_key = credentials['SecretAccessKey']
-        # session_token = credentials['SessionToken']
-        # fs = s3fs.S3FileSystem(key=access_key, secret=secret_key, token=session_token)
-        fs = s3fs.S3FileSystem()
-        destination = f's3://{s3_bucket_log}/{s3_key_log}'
-        with fs.open(destination, 'wb') as f:
-            data.write_csv(f)
-            LOGGER.info(f'Result CSV file successfully uploaded on {destination}')
-        return True
-    except Exception as e:
-        LOGGER.error(e)
-        return False
 
 def add_result_frame_row(row_num=None, invalid_val=None, rule=None, blocking=False) -> pl.LazyFrame:
     '''
@@ -129,13 +65,7 @@ def initialize_dataframe(
         #In case the file content is correct and there are no "ragged" lines,
         # i.e lines with more or less columns than the header the df creation should be successful
         if "s3://" in file_url:
-            session = boto3.session.Session()
-            credentials = session.get_credentials().get_frozen_credentials()
-            storage_options = {
-                "aws_access_key_id": credentials.access_key,
-                "aws_secret_access_key": credentials.secret_key,
-                "aws_region": AWS_REGION,
-            }
+            storage_options = generate_storage_creds()
         else:
             storage_options = None
         try:
@@ -185,7 +115,7 @@ def initialize_dataframe(
         except FileNotFoundError:
             raise FileNotFoundError(f'File {file_url} not found')
         except Exception as e:
-            LOGGER.fatal(f'Error reading file: {file_url}')
+            LOGGER.fatal("Error reading file: %s", file_url)
             raise e
     return df, err
 
@@ -203,8 +133,8 @@ def header_checker(
     blocking = header_blocking
     if header_list is None or df_headers is None:
         raise ValueError('Header list and file headers cannot be None')
-    LOGGER.debug(f'Header list from configuration: {"|".join(header_list)}')
-    LOGGER.debug(f'Header list from the file: {"|".join(df_headers)}')
+    LOGGER.debug("Header list from configuration: %s", "|".join(header_list))
+    LOGGER.debug("Header list from the file: %s", "|".join(df_headers))
     # The fist check will simply indicate us that the 2 lists are different.
     # Further tests are done to decide the exact problem with the header.
     if header_list != df_headers:
@@ -248,7 +178,7 @@ def file_level_validations(df: pl.DataFrame, header_list: list, rules: dict) -> 
 
         blocking = True if rule['is_blocking'] else False
         if rule["rule"] == 'record_count':
-            LOGGER.debug(f'Checking record count. Expected between {rule["min"]} and {rule["max"]} records')
+            LOGGER.debug("Checking record count. Expected between %s and %s records", rule["min"], rule["max"])
             rec_count = df.select(pl.len()).collect().item()
             if rec_count < int(rule["min"]) or rec_count > int(rule["max"]):
                 LOGGER.warning(f'Expected between {rule["min"]} and {rule["max"]} records. Actual: {len(df)}')
@@ -256,7 +186,7 @@ def file_level_validations(df: pl.DataFrame, header_list: list, rules: dict) -> 
                     err_list, 
                     add_result_frame_row(None, f'Expected between {rule["min"]} and {rule["max"]} records. Actual: {rec_count}', 'record_count', blocking)])
         elif rule["rule"] == 'column_count':
-            LOGGER.debug(f'Checking column count. Expected {len(header_list)} columns')
+            LOGGER.debug("Checking column count. Expected %s columns", len(header_list))
             if len(col_names) != len(header_list):
                 LOGGER.warning(f'Expected {len(header_list)} columns, got {len(df.columns)}')
                 err_list = pl.concat([err_list, add_result_frame_row(None, f'Expected {len(header_list)} columns, got {len(df.columns)}', 'column_count', blocking)])
@@ -298,34 +228,35 @@ def generate_base_model(columns: list, df_columns: list, rules: List[dict]) -> d
     LOGGER.debug(f'Building base model for validation')
     for column in columns:
         if column in df_columns:
-            allow_nulls = False if any([True for _ in rules if _["rule"].casefold() == "null" and _["column_name"] == column]) else True
+            allow_nulls = not bool(any([True for _ in rules if _["rule"].casefold() == "null" and _["column_name"] == column]))
             fields[column] = (Union[str, None], ...) if allow_nulls else (str, ...)
             for rule in rules:
                 if rule['column_name'] == column:
                     if rule['rule'].casefold() == 'email':
                         fields[column] = (Union[pydantic.EmailStr, None], ...) if allow_nulls else (pydantic.EmailStr, ...)
-                        LOGGER.debug(f'Adding {rule['rule']} validation for column {column}. Configuration: {fields[column]}')
+                        debug_msg = f'Adding {rule['rule']} validation for column {column}. Configuration: {fields[column]}'
                     elif rule['rule'].casefold() == 'numeric':
                         fields[column] = (Union[Annotated[float, pydantic.Field(strict=False)], None], ...) if allow_nulls else (Annotated[float, pydantic.Field(strict=False)], ...)
-                        LOGGER.debug(f'Adding {rule['rule']} validation for column {column}. Configuration: {fields[column]}')
+                        debug_msg = f'Adding {rule['rule']} validation for column {column}. Configuration: {fields[column]}'
                     elif rule['rule'].casefold() == 'date':
                         date_format = rule['format']
                         fields[column] = (Annotated[datetime, pydantic.BeforeValidator(lambda v: validate_datetime_format(v, date_format, allow_nulls))], ...)
-                        LOGGER.debug(f'Adding {rule['rule']} validation for column {column}. Configuration: {fields[column]}')
+                        debug_msg = f'Adding {rule['rule']} validation for column {column}. Configuration: {fields[column]}'
                     elif rule['rule'].casefold() == 'lov':
                         fields[column] = (Union[Literal[tuple(rule['values'])], None], ...) if allow_nulls else (Literal[tuple(rule['values'])], ...)
-                        LOGGER.debug(f'Adding {rule['rule']} validation for column {column}. Configuration: {fields[column]}')
+                        debug_msg = f'Adding {rule['rule']} validation for column {column}. Configuration: {fields[column]}'
                     elif rule['rule'].casefold() == 'length':
                         fields[column] = (Union[Annotated[str, pydantic.Field(min_length=int(rule['column_length']['min']), max_length=int(rule['column_length']['max']))], None], ...) if allow_nulls else (Annotated[str, pydantic.Field(min_length=int(rule['column_length']['min']), max_length=int(rule['column_length']['max']))], ...)
-                        LOGGER.debug(f'Adding {rule['rule']} validation for column {column}. Configuration: {fields[column]}')
+                        debug_msg = f'Adding {rule['rule']} validation for column {column}. Configuration: {fields[column]}'
                     elif rule['rule'].casefold() == 'range':
                         fields[column] = (Union[Annotated[float, pydantic.Field(ge=int(rule['column_value_range']['min']), le=int(rule['column_value_range']['max']), strict=False)], None], ...) if allow_nulls else (Annotated[float, pydantic.Field(ge=int(rule['column_value_range']['min']), le=int(rule['column_value_range']['max']), strict=False)], ...)
-                        LOGGER.debug(f'Adding {rule['rule']} validation for column {column}. Configuration: {fields[column]}')
+                        debug_msg = f'Adding {rule['rule']} validation for column {column}. Configuration: {fields[column]}'
                     elif rule['rule'].casefold() in ['unique', 'null']:
                         continue
                     else:
                         fields[column] = (Union[str, None], ...) if allow_nulls else (str, ...)
                         LOGGER.debug(f'Adding default validation for column {column} as rule name didn\'t match any rules. Configuration: {fields[column]}')
+                    LOGGER.debug(debug_msg)
                 else:
                     continue
         else:
@@ -409,23 +340,7 @@ def file_validate_start(task_config: dict) -> pl.DataFrame:
 
         LOGGER.info("S3 Key: %s" % s3_key)
         LOGGER.debug(f'S3 Bucket: {s3_bucket}')
-        session = boto3.session.Session()
-        credentials = session.get_credentials().get_frozen_credentials()
-        storage_options = {
-            "aws_access_key_id": credentials.access_key,
-            "aws_secret_access_key": credentials.secret_key,
-            "aws_session_token": credentials.token,
-            "aws_region": AWS_REGION,
-        }
         file_url = f's3://{s3_bucket}/{s3_key}'
-        #Seems like polars have a problem with presigned urls. This issue is supposed to be fixed, however I still get bad request on 1.20
-        #https://github.com/pola-rs/polars/issues/18186
-    
-        # params = {"Bucket": s3_bucket, "Key": s3_key}
-        # file_url = S3_CLIENT.generate_presigned_url(
-        #     "get_object", Params=params, ExpiresIn=PRESIGNED_URL_DURATION
-        # )
-        # LOGGER.debug(f'S3 file URL: {file_url}')
     else:
         file_url = task_config["source"]
     
@@ -440,7 +355,7 @@ def file_validate_start(task_config: dict) -> pl.DataFrame:
     df, errors = initialize_dataframe(file_url, delimiter, check_col_count, col_count_blocking)
 
     if task_config["file"]["header_flag"]:
-        header_blocking = True if any(True for _ in task_config["validate"]["file_rules"] if _["rule"] == "header" and _["is_blocking"]) else False
+        header_blocking = bool(any(True for _ in task_config["validate"]["file_rules"] if _["rule"] == "header" and _["is_blocking"]))
         errors = pl.concat([errors, header_checker(header_list, df.collect_schema().names(), header_blocking)])
 
     if task_config["validate"]["file_rules"]:
@@ -479,10 +394,7 @@ def get_args():
         '--batch_size',
         type=int,
         help='Batch size for file processing. Overwrites default size in config (10000)')
-    return p.parse_args()
-
-def main():
-    args = get_args()
+    args = p.parse_args()
     if args.cfg:
         with open(args.cfg, 'r', encoding='utf8') as f:
             event = json.load(f)
@@ -493,56 +405,71 @@ def main():
         event['task_config']['source'] = args.file_path
     if args.batch_size:
         event['task_config']['batch_size'] = args.batch_size
-    task_config = event["task_config"]
+    event['task_config']['execution_starttime'] = datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%f")
+    
+    return event["task_config"]
 
-    try:
-        task_config['execution_starttime'] = datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%f")
-        validation_result = file_validate_start(task_config)
-        if validation_result.is_empty():
-            LOGGER.info("Validation successful. No errors detected.")
-            jstate = Jobstate.success
-        # Check "warning" state
-        warn = not(validation_result.filter(pl.col('is_blocking') == False).is_empty())
-        # Check "error" state
-        err = not(validation_result.filter(pl.col('is_blocking') == True).is_empty())
-        
+def check_validation_status(result: pl.DataFrame) -> Jobstate:
+    jstate = Jobstate.success
+    if result.is_empty():
+        LOGGER.info("Validation successful. No errors detected.")
+        jstate = Jobstate.success
+    # Check for warnings and errors
+    else:
+        warn = not(result.filter(pl.col('is_blocking') == False).is_empty())
+        err = not(result.filter(pl.col('is_blocking') == True).is_empty())
         if warn and not err:
             LOGGER.warning("Validation successful with warnings.")
             jstate = Jobstate.warning
         elif err:
             LOGGER.error("Validation failed.")
             jstate = Jobstate.failure
-        if jstate == 'success':
-            validation_result = add_result_frame_row(None, 'No errors, validation successful', None, False)
-        if "s3://" in task_config['log_bucket_name']:
-            put_results_s3(validation_result, task_config)
-        elif task_config['log_bucket_name'] != '':
-            LOGGER.info('Writing validation results to local file')
-            try:
-                validation_result.write_csv(task_config['log_bucket_name'])
-            except Exception as e:
-                LOGGER.error(f'Error writing to local file: {e}')
-            LOGGER.info('Validation results written to local file')
-        execution_endtime = datetime.now()
-        time_elapsed = execution_endtime - datetime.strptime(task_config['execution_starttime'], "%Y-%m-%dT%H:%M:%S.%f")
-        LOGGER.info("[Validation]: " "Time elapsed (hh:mm:ss.ms) {}".format(time_elapsed))
+    return jstate
+
+def write_results(result: pl.DataFrame, src_path: str, tgt_path: str) -> None:
+    if "s3://" in tgt_path:
+        put_results_s3(result, src_path, tgt_path)
+    elif tgt_path != '':
+        LOGGER.info('Writing validation results to local file')
+        try:
+            result.write_csv(tgt_path)
+        except Exception as e:
+            LOGGER.error("Error writing to local file: %s", e)
+        LOGGER.info('Validation results written to local file')
+    else:
+        LOGGER.info('No log path specified. Validation results not stored.')
+
+def main():
+    task_config = get_args()    
+
+    try:
+        validation_result = file_validate_start(task_config)
+        job_status = check_validation_status(validation_result)
         
+        if job_status == 'success':
+            validation_result = add_result_frame_row(None, 'No errors, validation successful', None, False)
+        write_results(validation_result, task_config['source'], task_config['log_bucket_name'])
+
     except Exception as e:
         LOGGER.fatal("Validation failed with unexpected exception")
         unknown_exc = e
 
     finally:
+        execution_endtime = datetime.now()
+        time_elapsed = execution_endtime - datetime.strptime(task_config['execution_starttime'], "%Y-%m-%dT%H:%M:%S.%f")
         if 'unknown_exc' in locals():
-            execution_endtime = datetime.now()
-            time_elapsed = execution_endtime - datetime.strptime(task_config['execution_starttime'], "%Y-%m-%dT%H:%M:%S.%f")
-            LOGGER.info("[Validation]: " "Time elapsed (hh:mm:ss.ms) {}".format(time_elapsed))
+            LOGGER.info("[Validation]: Time elapsed (hh:mm:ss.ms) %s", time_elapsed)
             raise unknown_exc
         else:
-            if jstate == 'failure':
-                execution_endtime = datetime.now()
-                time_elapsed = execution_endtime - datetime.strptime(task_config['execution_starttime'], "%Y-%m-%dT%H:%M:%S.%f")
-                LOGGER.info("[Validation]: " "Time elapsed (hh:mm:ss.ms) {}".format(time_elapsed))
+            if job_status == 'failure':
+                LOGGER.fatal("[Validation result]: %s", validation_result.write_json())
+                LOGGER.info("[Validation]: Time elapsed (hh:mm:ss.ms) %s", time_elapsed)
                 raise ValidationError("Validation failed")
+            if job_status == 'warning':
+                LOGGER.warning("[Validation result]: %s", validation_result.write_json())
+                LOGGER.info("[Validation]: Time elapsed (hh:mm:ss.ms) %s", time_elapsed)
+            else:
+                LOGGER.info("[Validation]: Time elapsed (hh:mm:ss.ms) %s", time_elapsed)
     
 if __name__ == '__main__':
     main()
