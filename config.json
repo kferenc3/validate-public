@@ -1,0 +1,90 @@
+{
+    "task_config": {
+        "source": "str - local file path or S3 url (s3://<bucket>/<file path>",
+        "log_bucket_name": "str - local path or S3 bucket where result should be written (s3://<bucket>)",
+        "batch_size": "<int - number of records to be processed in one batch>",
+        "file": {
+            "delimiter": "<str - file delimiter>",
+            "encoding": "UTF8",
+            "format": "csv",
+            "header_flag": true,
+            "header_str": "<str -file header with delimiters e.g colA|colB|colC>"
+        },
+        "validate": {
+            "column_rules": [
+                        {
+                            "column_name": "colA",
+                            "is_blocking": true,
+                            "rule": "UNIQUE"
+                        },
+                        {
+                            "column_name": "colA",
+                            "is_blocking": true,
+                            "rule": "EMAIL"
+                        },
+                        {
+                            "column_name": "colA",
+                            "is_blocking": true,
+                            "numeric": true,
+                            "rule": "NUMERIC"
+                        },
+                        {
+                            "column_name": "colA",
+                            "format": "%Y/%b/%d",
+                            "is_blocking": true,
+                            "rule": "DATE"
+                        },
+                        {
+                            "column_name": "colA",
+                            "is_blocking": true,
+                            "rule": "LOV",
+                            "values": [
+                            "val1",
+                            "val2",
+                            "val3",
+                            "val4"
+                            ]
+                        },
+                        {
+                            "column_length": {
+                            "max": "15",
+                            "min": "5"
+                            },
+                            "column_name": "colA",
+                            "is_blocking": true,
+                            "rule": "LENGTH"
+                        },
+                        {
+                            "column_name": "colA",
+                            "column_value_range": {
+                            "max": "10000",
+                            "min": "50"
+                            },
+                            "is_blocking": false,
+                            "rule": "RANGE"
+                        },
+                        {
+                            "column_name": "colA",
+                            "is_blocking": true,
+                            "rule": "NULL"
+                        }
+            ],
+            "file_rules": [ 
+                        {
+                            "is_blocking": true,
+                            "rule": "header"
+                        },
+                        {
+                            "is_blocking": true,
+                            "max": "1000000",
+                            "min": "1",
+                            "rule": "record_count"
+                        },
+                        {
+                            "is_blocking": true,
+                            "rule": "column_count"
+                        }
+        ]
+        }
+    }
+}

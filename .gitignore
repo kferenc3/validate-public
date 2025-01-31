@@ -1,6 +1,6 @@
 *.csv
 *.gz
-*.json
+test_*.json
 .vscode
 .venv
 .coverage

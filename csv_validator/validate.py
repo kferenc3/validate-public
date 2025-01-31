@@ -3,7 +3,6 @@ CMD tool for validating CSV file content and generating data quality reports
 '''
 
 import os
-import re
 import logging
 import json
 import argparse
@@ -20,8 +19,6 @@ import polars as pl
 # ENV VARS
 AWS_REGION = os.getenv("AWS_REGION", "eu-central-1")
 # Constants for process results
-RESULT_PASS = "P"
-RESULT_FAIL = "F"
 
 PRESIGNED_URL_DURATION = 60 * 60
 
