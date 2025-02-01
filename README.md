@@ -29,8 +29,8 @@ poetry run python csv_validator/validate.py --cfg <config.json>
 ```
 
 ## Configuration
-to do
+The config json consist of 3 main subdicts: file, file_rules and column_rules. Apart from them there are a few additional entries that are required: source, log_bucket_name and batch_size. Source and batch_size can be overwritten with `--file_path` and `--batch_size` command line arguments.
+
 ## Backlog
-- provide example config json
 - rework existing tests and increase coverage
 - improve readme
